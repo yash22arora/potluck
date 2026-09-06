@@ -64,7 +64,7 @@ Full plan with rationale: `docs/BUILD_PLAN.md`.
 |---|-------|-------|
 | 0 | Skeleton that deploys | **done** |
 | 1 | Telegram in, echo out | next |
-| 2 | Swiggy MCP client + OAuth, no agent | |
+| 2 | Swiggy MCP client + OAuth, no agent | **done** |
 | 3 | Mock MCP server + `DRY_RUN` | |
 | 4 | Day-plan graph with `interrupt()` | the key phase |
 | 5 | Relevance gate + eval set | |
@@ -84,6 +84,10 @@ potluck/
   logging.py     structlog: console locally, JSON in deploy
   main.py        FastAPI: / · /healthz · /readyz
   worker.py      APScheduler process (same image, different command)
+  crypto.py      Fernet encryption for tokens at rest
+  api/           swiggy_auth.py — /auth/swiggy/{start,callback,status}
+  swiggy/        servers · oauth · tokens · client
+  scripts/       probe.py — talk to Swiggy with no agent involved
   db/            base · models · session
 alembic/         async migrations, URL comes from config not alembic.ini
 docker/          Dockerfile + entrypoint.sh (web | worker | migrate)
@@ -91,7 +95,7 @@ tests/
 docs/
 ```
 
-Planned, not yet written: `telegram/`, `gate/`, `graph/`, `swiggy/`, `memory/`.
+Planned, not yet written: `telegram/`, `gate/`, `graph/`, `memory/`, `swiggy/mock.py`.
 
 ## Commands
 
@@ -104,7 +108,85 @@ make test
 make lint / fmt
 make revision m="add messages"   # autogenerate a migration
 make migrate                     # apply against the running db
+
+make env                         # safe to re-run: backfills new keys, keeps yours
+make auth                        # prints the URL that links a Swiggy account
+make probe c="status"            # token state, no network
+make probe c="tools instamart"   # list a surface's tools
+make probe c="search milk"       # call search_products
 ```
+
+## Swiggy MCP: the facts that shape the design
+
+Docs: [authenticate](https://mcp.swiggy.com/builders/docs/start/authenticate/) ·
+[build an agent](https://mcp.swiggy.com/builders/docs/start/developer/build-an-agent/)
+
+Surfaces (fixed URLs, streamable HTTP, `Authorization: Bearer <token>`):
+
+| Surface | URL | Tools |
+|---|---|---|
+| Food | `https://mcp.swiggy.com/food` | 18 |
+| Instamart | `https://mcp.swiggy.com/im` | 19 |
+| Dineout | `https://mcp.swiggy.com/dineout` | 12 |
+
+**It is `/im`, not `/instamart`.**
+
+Four properties of Swiggy's OAuth that are not negotiable and that the code is
+built around:
+
+1. **No client_id in a dashboard.** Dynamic client registration, RFC 7591:
+   `POST /auth/register` at runtime returns one. It is bound to an exact
+   redirect URI, so local and deployed each register separately. Stored in
+   `swiggy_oauth_clients`.
+2. **No refresh tokens in v1.** The access token lasts 5 days (`expires_in`
+   432000) and then it is gone. Nothing can renew it in the background — a
+   human has to open a browser. `SwiggyToken.needs_reauth` is how that
+   propagates; phase 7 must surface it in the group chat, not fail silently.
+3. **401 and 419 mean re-authorize, never retry.** 401 = expired or invalid,
+   419 = session revoked, 403 = insufficient scope. `SwiggyClient` walks the
+   exception chain for these and converts them into `NeedsAuthorization`.
+4. **Redirect allowlist is exact-match, no wildcards.** `http://localhost` is
+   the one non-HTTPS exception, which is what makes local development work.
+
+Other details: PKCE is S256 over a 32-byte verifier; scopes are `mcp:tools`,
+`mcp:resources`, `mcp:prompts`; the authorization code is single-use and lives
+120 seconds, so it is exchanged inside the callback handler; access to the three
+surfaces is granted per *user*, not per application.
+
+### MCP Python SDK 2.x
+
+We are on `mcp>=2.1`. Four differences from the 1.x examples you will find in
+most blog posts and in Swiggy's own docs — each one is an import-time or
+first-call crash:
+
+| 1.x | 2.x |
+|---|---|
+| `streamablehttp_client` | `streamable_http_client` |
+| `headers=` parameter | pass a configured `http_client` |
+| yields 3 streams | yields 2 |
+| `httpx` | `httpx2` (a separate package) |
+
+So the shape is:
+
+```python
+async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {t}"}) as http:
+    async with streamable_http_client(url, http_client=http) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+```
+
+`tests/test_mcp_sdk_contract.py` pins all of this, so the next rename fails in
+CI rather than at dinner time.
+
+One consequence worth knowing: for tool calls the SDK turns a non-2xx response
+into a JSON-RPC error and **the HTTP status is lost**. That is why
+`SwiggyClient` falls back to `_ask_server_about_token` — a plain GET on the
+surface URL that reads only the status line — instead of trying to infer 401
+from an error message.
+
+Tokens are encrypted at rest with Fernet, keyed off `SECRET_KEY`. Changing that
+variable invalidates every stored token — the cure is re-authorizing, and
+`crypto.decrypt` says so in its error.
 
 ## Decisions already made (don't relitigate without reason)
 
@@ -122,6 +204,16 @@ make migrate                     # apply against the running db
   checks.
 - **Railway** as the deploy target (`railway.json`), chosen for managed
   Postgres and Dockerfile builds.
+- **Swiggy tokens encrypted at rest**, not stored plaintext. A token is five
+  days of spending authority.
+- **`account_key` on the token**, not a hardcoded single user. It is `"default"`
+  today and becomes the Telegram user id of whoever's Swiggy account pays once
+  the group has members.
+- **Token exchange sends form-encoded first, JSON on 4xx.** OAuth specifies
+  form; Swiggy's docs show JSON. Trying both beats guessing.
+- **`tools/bootstrap_env.py` backfills .env** rather than only creating it, so
+  keys added to `.env.example` later reach an existing `.env`. `make env` is
+  safe to re-run and never overwrites a value you set.
 - **Distribution model: one container per household.** Simpler than
   multi-tenant — no shared token vault, no cross-group leakage. Costs nothing
   as long as rules 4 and 5 above hold.
@@ -133,8 +225,9 @@ make migrate                     # apply against the running db
   gate we don't control. Ask `builders@swiggy.in` during phase 2 whether one
   registered client can serve a distributed self-hosted app. The answer
   reshapes phase 8.
-- Swiggy MCP server URLs are unset in `.env.example` — fill them from the
-  builders console.
+- ~~Swiggy MCP server URLs~~ — resolved, they are fixed and in the table above.
+- Production access is still gated on a demo video; localhost is whitelisted for
+  development, which is what phase 2 through 7 run against.
 
 ## Conventions
 

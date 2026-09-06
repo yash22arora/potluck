@@ -47,12 +47,30 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = None
     public_base_url: str | None = None
 
-    # --- swiggy mcp (phase 2) ----------------------------------------------
-    swiggy_food_mcp_url: str | None = None
-    swiggy_instamart_mcp_url: str | None = None
-    swiggy_dineout_mcp_url: str | None = None
-    swiggy_client_id: str | None = None
-    swiggy_client_secret: str | None = None
+    # --- security ----------------------------------------------------------
+    # Used to derive the key that encrypts Swiggy tokens at rest.
+    # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    secret_key: str | None = None
+
+    # --- swiggy mcp --------------------------------------------------------
+    # The surface URLs are fixed; only the base changes (never, in practice).
+    swiggy_base_url: str = "https://mcp.swiggy.com"
+    swiggy_scopes: str = "mcp:tools mcp:resources mcp:prompts"
+    # Must exactly match a registered redirect. http://localhost is allowed for
+    # development; everything else has to be https.
+    swiggy_redirect_uri: str = "http://localhost:8000/auth/swiggy/callback"
+
+    @property
+    def swiggy_food_url(self) -> str:
+        return f"{self.swiggy_base_url}/food"
+
+    @property
+    def swiggy_instamart_url(self) -> str:
+        return f"{self.swiggy_base_url}/im"
+
+    @property
+    def swiggy_dineout_url(self) -> str:
+        return f"{self.swiggy_base_url}/dineout"
 
     @property
     def is_local(self) -> bool:

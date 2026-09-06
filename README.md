@@ -40,6 +40,18 @@ make up               # postgres + api + worker
 curl localhost:8000/healthz
 ```
 
+Then connect a Swiggy account by opening
+<http://localhost:8000/auth/swiggy/start> in a browser, and check it worked:
+
+```bash
+make probe c="status"
+make probe c="tools instamart"
+make probe c="search milk"
+```
+
+Swiggy tokens last five days and there are no refresh tokens, so that browser
+visit comes round again — the bot will ask you when it does.
+
 `/readyz` will tell you what's still missing (database, API keys). Model
 provider is configurable — `PLANNER_MODEL` and `GATE_MODEL` take
 `provider:model` strings, so Anthropic and OpenAI are both fine, and the two
@@ -62,7 +74,7 @@ docs/       the build plan
 |---|---|---|
 | 0 | Skeleton that deploys | ✅ |
 | 1 | Telegram in, echo out | |
-| 2 | Swiggy MCP client + OAuth | |
+| 2 | Swiggy MCP client + OAuth | ✅ |
 | 3 | Mock MCP server, dry-run everything | |
 | 4 | The day-plan graph, with pause-and-confirm | |
 | 5 | Relevance gate + eval set | |

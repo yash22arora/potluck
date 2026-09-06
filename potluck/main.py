@@ -16,10 +16,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from potluck import __version__
+from potluck.api import swiggy_auth
 from potluck.config import get_settings
 from potluck.db.session import dispose_engine, get_engine
 from potluck.llm import configured_models, missing_api_keys
 from potluck.logging import configure_logging, get_logger
+from potluck.swiggy.servers import all_urls
 
 log = get_logger(__name__)
 
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
         env=settings.env,
         dry_run=settings.dry_run,
         models=configured_models(),
+        swiggy=all_urls(),
     )
     if settings.dry_run is False:
         log.warning("dry_run_disabled", detail="this process can spend real money")
@@ -42,6 +45,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Potluck", version=__version__, lifespan=lifespan)
+app.include_router(swiggy_auth.router)
 
 
 @app.get("/")
@@ -78,6 +82,12 @@ async def readyz() -> JSONResponse:
 
     missing = missing_api_keys()
     checks["models"] = configured_models()
+
+    if not get_settings().secret_key:
+        ok = False
+        missing.append("SECRET_KEY")
+
+    checks["swiggy"] = all_urls()
     if missing:
         ok = False
         checks["missing_env"] = missing

@@ -2,7 +2,7 @@
 # is that you stop having to remember which.
 
 .DEFAULT_GOAL := help
-.PHONY: help install env up down logs migrate revision test lint fmt shell
+.PHONY: help install env auth probe up down logs migrate revision test lint fmt shell
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -10,8 +10,14 @@ help: ## Show this help
 install: ## Create the venv and install everything
 	uv sync --all-groups
 
-env: ## Create .env from the example if it does not exist
-	@test -f .env || (cp .env.example .env && echo "created .env — fill in your keys")
+env: ## Create .env if missing and fill in any blank generated values
+	@python3 tools/bootstrap_env.py
+
+auth: ## Print the URL that connects a Swiggy account
+	@echo "open this in a browser:  http://localhost:8000/auth/swiggy/start"
+
+probe: ## Talk to Swiggy with no agent: make probe c="search milk"
+	uv run python -m potluck.scripts.probe $(c)
 
 up: env ## Build and start db + api + worker
 	docker compose up --build -d

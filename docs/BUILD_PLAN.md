@@ -47,21 +47,49 @@ duplicate rows.
 
 ---
 
-## 2 — Talk to Swiggy, with no agent anywhere
-
-OAuth 2.1 with PKCE: `/auth/swiggy/start` redirects, `/auth/swiggy/callback`
-stores tokens. Then a plain script that connects over streamable HTTP, calls
-`get_addresses` and `search_products`, and prints what comes back.
+## 2 — Talk to Swiggy, with no agent anywhere ✅
 
 No LLM involved. The point is to see the protocol clearly before anything is
 reasoning about it.
 
-**Done when** `uv run python -m potluck.scripts.probe milk` prints real
-Instamart products.
+**The three surfaces** (fixed, streamable HTTP, bearer token):
+`https://mcp.swiggy.com/food` · `https://mcp.swiggy.com/im` ·
+`https://mcp.swiggy.com/dineout`. It is `/im`, not `/instamart`.
 
-**You learn** MCP from the client side, and a real OAuth handshake.
+**What the auth actually is.** OAuth 2.1 with PKCE, and three properties that
+shaped the code more than the happy path did:
 
----
+- *No client_id to paste anywhere.* Dynamic client registration (RFC 7591):
+  `POST /auth/register` at runtime issues one, bound to an exact redirect URI.
+  Local and deployed therefore register separately. Cached in
+  `swiggy_oauth_clients` so it happens once.
+- *No refresh tokens.* The access token lasts five days and then it is simply
+  gone. No amount of cleverness renews it — a human has to open a browser. The
+  design consequence is that "needs re-authorization" is a first-class state
+  that has to travel all the way up to the group chat, not an exception buried
+  in a log.
+- *Exact-match redirect allowlist*, with `http://localhost` the one non-HTTPS
+  exception. That is what makes local development possible at all.
+
+**What got built:**
+
+- `swiggy/oauth.py` — discovery, registration, PKCE S256, authorize URL, code
+  exchange. Pure HTTP, no database, so it tests without Postgres.
+- `swiggy/tokens.py` — persistence and the flow. Encrypted storage, state
+  validation, expiry with a 10-minute skew so a call never begins with seconds
+  of validity left.
+- `swiggy/client.py` — the MCP session, and the part that earns its keep:
+  401 and 419 are walked out of the exception chain, the account is marked
+  `needs_reauth`, and a `NeedsAuthorization` is raised carrying the URL to fix
+  it. Retrying a dead token is never right.
+- `api/swiggy_auth.py` — `/auth/swiggy/start`, `/callback`, `/status`.
+- `crypto.py` — Fernet, keyed off `SECRET_KEY`. A token is five days of
+  spending authority; it does not sit in Postgres in plaintext.
+
+**Done when** `make probe c="search milk"` prints real Instamart products.
+
+**You learn** MCP from the client side, and a real OAuth handshake — including
+the unglamorous half, which is what a client does when authorization runs out.
 
 ## 3 — A fake Swiggy you control
 
