@@ -1,0 +1,52 @@
+name: potluck
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: potluck
+      POSTGRES_PASSWORD: potluck
+      POSTGRES_DB: potluck
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U potluck -d potluck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: potluck:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["web"]
+    env_file: [.env]
+    environment:
+      # Overrides whatever .env says — inside compose the host is `db`.
+      DATABASE_URL: postgresql+asyncpg://potluck:potluck@db:5432/potluck
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    image: potluck:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["worker"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://potluck:potluck@db:5432/potluck
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  pgdata:
