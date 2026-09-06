@@ -125,17 +125,29 @@ class SwiggyClient:
                 ) from exc
             raise
 
-    async def list_tools(self, surface: Surface) -> list[dict[str, Any]]:
+    async def list_tools(
+        self, surface: Surface, include_schema: bool = False
+    ) -> list[dict[str, Any]]:
+        """The tools a surface exposes.
+
+        `include_schema` returns each tool's JSON input schema, which is how you
+        find out that Instamart's search wants an `addressId` without guessing
+        at parameter names.
+        """
         async with self._session(surface) as session:
             result = await session.list_tools()
-        return [
-            {
+
+        tools = []
+        for tool in result.tools:
+            entry: dict[str, Any] = {
                 "name": tool.name,
                 "title": tool.title or "",
                 "description": (tool.description or "").strip(),
             }
-            for tool in result.tools
-        ]
+            if include_schema:
+                entry["input_schema"] = tool.input_schema
+            tools.append(entry)
+        return tools
 
     async def call_tool(
         self,

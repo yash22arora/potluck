@@ -188,6 +188,49 @@ Tokens are encrypted at rest with Fernet, keyed off `SECRET_KEY`. Changing that
 variable invalidates every stored token — the cure is re-authorizing, and
 `crypto.decrypt` says so in its error.
 
+## Deferred requirements
+
+Agreed but not built. Do not lose these; do not build them early either.
+
+### Address selection (raised Sep 6, phase 2)
+
+Instamart's `search_products` — and every cart and checkout call after it —
+requires an `addressId`. The account has ~10 saved addresses spanning home,
+two offices and several friends' places, so there is no safe default.
+
+Swiggy's own `get_addresses` response says as much: it returns
+`resolution.needsUserClarification: true` alongside a `candidateAddressIds`
+list. The API is declining to guess, and neither should we.
+
+The requirement:
+
+1. **Resolve the delivery address once, at boot**, and cache it. Every
+   subsequent Swiggy call reuses it rather than re-resolving.
+2. **The user can change it at any time by talking to the bot** — "we're at
+   Saksham's tonight", "order to the office" — conversationally, not by
+   editing config or restarting anything.
+
+Design notes for whoever builds it (phase 4 or a small phase 3.5):
+
+- This is a **third human-in-the-loop moment**, alongside order confirmation
+  and the re-authorization prompt. Same `interrupt()` primitive. On first boot
+  with no cached address, the bot asks the group which one and waits.
+- Cache it as a **structured fact** in the phase-6 facts store (`address_id`
+  plus its tag, with `last_confirmed`), not in a config file — it is exactly
+  the kind of thing that store exists for, and it should decay: if the last
+  confirmation is weeks old, re-confirm rather than assume.
+- Match on the **tag** ("Home", "Work", "Saksham's Home"), because that is what
+  a human will say. Keep the id internal; never make anyone type it.
+- Address ids and address lines are personal data. They belong in the database,
+  never in logs, never in a repo file, and never in an LLM prompt beyond the
+  tag and the id.
+- A wrong address is a silent, expensive failure — the food arrives somewhere
+  real, just not where anyone is. Treat a change of address as needing
+  confirmation, the same as spending money.
+
+Until then, `SWIGGY_DEV_ADDRESS_ID` in `.env` is a **development shim only**,
+used by the probe script. Nothing in the agent may read it.
+
 ## Decisions already made (don't relitigate without reason)
 
 - **LangGraph, not bare LangChain** — the Postgres checkpointer and

@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # development; everything else has to be https.
     swiggy_redirect_uri: str = "http://localhost:8000/auth/swiggy/callback"
 
+    # Development shim ONLY, read by potluck/scripts/probe.py and nothing else.
+    # The agent resolves the address through the human — see "Deferred
+    # requirements" in CLAUDE.md.
+    swiggy_dev_address_id: str | None = None
+
     @property
     def swiggy_food_url(self) -> str:
         return f"{self.swiggy_base_url}/food"
